@@ -1,0 +1,15 @@
+name: denoise
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pesq=0.0.4
+  - numpy
+  - pandas
+  - scipy
+  - pysoundfile
+  - matplotlib
+  - tqdm
+  - ipykernel
+  - pip
+  # PyTorch는 아래 README의 명령으로 따로 설치합니다(GPU: CUDA 13.2 휠, CPU: 기본 휠).

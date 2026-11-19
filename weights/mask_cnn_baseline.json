@@ -1,0 +1,21 @@
+{
+  "model": "mask_cnn",
+  "model_kwargs": {"n_fft": 512, "hop": 128, "hidden_channels": [64, 64], "kernel_sizes": [5, 3, 1]},
+  "weights": "mask_cnn_baseline.pt",
+  "sample_rate": 16000,
+  "source_run": "runs/baseline_cnn_gpu_seed1",
+  "seed": 1,
+  "best_epoch": 84,
+  "epochs_completed": 104,
+  "validation_pesq_wb": 1.7255,
+  "training": {
+    "loss": "log-magnitude L1 (log1p|S|)",
+    "optimizer": "Adam lr 1e-3, betas (0.9, 0.999), weight_decay 0",
+    "batch_size": 16,
+    "scheduler": "ReduceLROnPlateau(max, factor 0.5, patience 5, threshold 0.001 abs, min_lr 1e-5)",
+    "early_stopping": "min 30 epochs, patience 20, min_delta 0.001 (validation PESQ-WB)",
+    "max_epochs": 200,
+    "device": "NVIDIA GeForce RTX 4090",
+    "torch": "2.15.0+cu132"
+  }
+}
