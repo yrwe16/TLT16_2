@@ -1,0 +1,50 @@
+# ===== 데이터: 수강생 녹음(개인 식별 정보) — 절대 커밋 금지 =====
+*.wav
+*.WAV
+*.flac
+*.mp3
+samples.csv
+data/
+train/
+validation/
+test/
+
+# 제출 형식 테스트용 입출력 폴더
+input/
+output/
+
+# ===== 캐시·실험 산출물 =====
+cache/
+*.npy
+*.npz
+*.h5
+*.pkl
+runs/
+logs/
+wandb/
+lightning_logs/
+experiments/**/tmp/
+
+# 가중치: 제출용은 weights/ 아래 *.pt만 LFS로 커밋 (.gitattributes)
+checkpoints/
+*.ckpt
+*.pth
+*.onnx
+
+# ===== Python / Jupyter =====
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+*.egg-info/
+
+# ===== OS / 에디터 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Claude Code 로컬 설정
+.claude/
