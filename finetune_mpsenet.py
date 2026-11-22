@@ -14,6 +14,7 @@
 예) python finetune_mpsenet.py --run-name ft_dns_remix --remix-prob 0.5
 """
 import argparse
+import copy
 import json
 import math
 from concurrent.futures import ProcessPoolExecutor
@@ -55,6 +56,8 @@ def parse_args():
     p.add_argument("--metric-weight", type=float, default=0.05)
     p.add_argument("--sisdr-weight", type=float, default=0.0)
     p.add_argument("--pesq-loss-weight", type=float, default=0.0)
+    p.add_argument("--ema-decay", type=float, default=0.0, help="0이면 끔. 매 step 가중치 지수이동평균, 검증·저장 후보에 포함")
+    p.add_argument("--save-every-epoch", action="store_true", help="epoch마다 g_ep<N>(원본)·g_ep<N>_ema 저장")
     p.add_argument("--patience", type=int, default=8, help="검증 PESQ 개선 없이 기다릴 epoch")
     p.add_argument("--pesq-workers", type=int, default=12)
     return p.parse_args()
@@ -188,6 +191,12 @@ def main():
         from src.torch_pesq import PesqLoss
         pesq_loss_fn = PesqLoss(1.0, sample_rate=16000).to(device)
 
+    ema = None
+    if args.ema_decay > 0:
+        ema = copy.deepcopy(model).eval()
+        for prm in ema.parameters():
+            prm.requires_grad_(False)
+
     log(f"start | init {args.init.name} | args {vars(args)}")
     best = validate(model, val_noisy, val_clean, device, pool)
     torch.save({"generator": gen.state_dict()}, run_dir / "g_best")
@@ -247,22 +256,38 @@ def main():
             opt_g.zero_grad()
             loss.backward()
             opt_g.step()
+            if ema is not None:
+                with torch.no_grad():
+                    for pe, pm in zip(ema.generator.parameters(), gen.parameters()):
+                        pe.lerp_(pm, 1 - args.ema_decay)
+                    for be, bm in zip(ema.generator.buffers(), gen.buffers()):
+                        be.copy_(bm)
             for k, v in (("gen", loss), ("mag", loss_mag), ("pha", loss_pha), ("time", loss_time)):
                 sums[k] += v.item()
         sched_g.step()
         train_s = perf_counter() - t0
-        val = validate(model, val_noisy, val_clean, device, pool)
+        val_raw = validate(model, val_noisy, val_clean, device, pool)
+        val_ema = validate(ema, val_noisy, val_clean, device, pool) if ema is not None else float("nan")
+        if ema is not None:
+            ema.eval()  # validate()가 train()으로 되돌리므로 EMA 모델은 다시 eval
+        if args.save_every_epoch:
+            torch.save({"generator": gen.state_dict()}, run_dir / f"g_ep{epoch:02d}")
+            if ema is not None:
+                torch.save({"generator": ema.generator.state_dict()}, run_dir / f"g_ep{epoch:02d}_ema")
+        use_ema = ema is not None and val_ema > val_raw
+        val = val_ema if use_ema else val_raw
         if val > best:
             best, best_epoch, stale = val, epoch, 0
-            torch.save({"generator": gen.state_dict()}, run_dir / "g_best")
+            src = ema.generator if use_ema else gen
+            torch.save({"generator": src.state_dict(), "ema": use_ema}, run_dir / "g_best")
         else:
             stale += 1
         avg = {k: v / steps_per_epoch for k, v in sums.items()}
-        history.append({"epoch": epoch, "val_pesq_wb": val, **{f"train_{k}": v for k, v in avg.items()},
+        history.append({"epoch": epoch, "val_pesq_wb": val, "val_raw": val_raw, "val_ema": val_ema, **{f"train_{k}": v for k, v in avg.items()},
                         "lr": opt_g.param_groups[0]["lr"], "elapsed": perf_counter() - started})
         pd.DataFrame(history).to_csv(run_dir / "history.csv", index=False)
         log(f"epoch {epoch:3d} | gen {avg['gen']:.4f} mag {avg['mag']:.4f} pha {avg['pha']:.3f} disc {avg['disc']:.4f} sisdr {avg['sisdr']:.2f} pesqL {avg['pesq']:.3f} | "
-            f"val PESQ {val:.4f} | best {best:.4f} (ep {best_epoch}) | train {train_s:.0f}s total {perf_counter() - started:.0f}s")
+            f"val PESQ raw {val_raw:.4f} ema {val_ema:.4f} | best {best:.4f} (ep {best_epoch}) | train {train_s:.0f}s total {perf_counter() - started:.0f}s")
         if stale >= args.patience:
             log("조기 종료")
             break

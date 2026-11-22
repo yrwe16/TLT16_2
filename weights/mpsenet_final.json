@@ -1,26 +1,41 @@
 {
   "model": "mpsenet",
   "model_kwargs": {},
-  "weights": "mpsenet_pesqloss_pcs.pt",
+  "weights": "mpsenet_final.pt",
   "pcs_alpha": 0.3,
   "sample_rate": 16000,
-  "validation_pesq_wb": 3.4824,
+  "validation_pesq_wb": 3.5098,
   "validation_pesq_wb_without_pcs": 3.4529,
   "lineage": [
     "MP-SENet (Lu et al. 2023, MIT) public DNS checkpoint g_best_dns: zero-shot 3.1757",
     "runs/ft_dns_remix_disc: fine-tuned on our train set, dynamic remix 0.5, metric discriminator 0.05: 3.2936",
     "runs/ft_ext_zeroth: + Zeroth Korean (OpenSLR 40, CC BY 4.0) clean speech mixed with our train noise, ext 0.5: 3.3356 (epoch 26)",
     "runs/ft_ext_pesqloss: + differentiable PESQ loss 0.1 (torch-pesq, MIT), lr 4e-5, decay 0.985: 3.4529 (epoch 19)",
-    "PCS post-processing alpha 0.3 (src/pcs.py): 3.4824"
+    "runs/ft_pesq_ema: continued from ft_ext_pesqloss, lr 3e-5, decay 0.985, PESQ loss 0.1, EMA 0.999 per step; early stop at epoch 18",
+    "weights = uniform average of the EMA weights saved at epochs 8-18 (11 checkpoints): 3.4577 single pass",
+    "PCS alpha 0.3: 3.4872; + TTA (input shifts 0/25/50/75 samples x polarity flip, 8 passes averaged): 3.5098"
   ],
   "training": {
     "loss": "MP-SENet: mag MSE 0.9, anti-wrapping phase 0.3, complex 0.1, consistency 0.1, time L1 0.2, metric 0.05, PESQ loss 0.1",
-    "optimizer": "AdamW lr 4e-5 betas (0.8, 0.99), ExponentialLR 0.985/epoch",
+    "optimizer": "AdamW lr 3e-5 betas (0.8, 0.99), ExponentialLR 0.985/epoch, EMA decay 0.999",
     "batch_size": 4,
     "segment_samples": 32000,
-    "snr_range_db": [-5, 20],
+    "snr_range_db": [
+      -5,
+      20
+    ],
     "steps_per_epoch": 1000,
     "device": "NVIDIA GeForce RTX 4090",
     "torch": "2.15.0+cu132"
-  }
+  },
+  "tta": {
+    "shifts": [
+      0,
+      25,
+      50,
+      75
+    ],
+    "flip": true
+  },
+  "validation_pesq_wb_without_pcs_tta": 3.4577
 }

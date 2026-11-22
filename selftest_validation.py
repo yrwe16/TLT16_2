@@ -23,7 +23,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     p.add_argument("--split", default="validation")
-    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_pesqloss_pcs.json")
+    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_final.json")
     p.add_argument("--device", default="auto")
     p.add_argument("--report", type=Path, default=None, help="파일별 결과 CSV 저장 경로(선택)")
     return p.parse_args()

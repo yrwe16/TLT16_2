@@ -3,11 +3,14 @@
 - noisy 입력과 저장된 가중치만 사용한다(추가 다운로드 없음).
 - GPU가 없으면 자동으로 CPU에서 실행한다(map_location).
 - 설정 JSON의 "model"이 mpsenet이면 MP-SENet(파일당 batch 1), "pcs_alpha"가 있으면 PCS 후처리를 붙인다.
+- "weights"가 목록이면 여러 가중치의 출력을 평균한다(앙상블).
+- "tta"가 있으면 입력을 몇 표본 늦춘 것("shifts")과 부호를 뒤집은 것("flip")도 복원해 되돌린 뒤 평균한다.
+  모두 noisy 입력만 쓰는 결정적 처리다.
 - 저장 후 파일명 일치, 16 kHz 모노, 표본 수 일치, 유한값 여부를 검사하고
   하나라도 어긋나면 0이 아닌 종료 코드로 끝난다.
 
 예) python infer.py
-    python infer.py --input input --output output --config weights/mpsenet_pesqloss_pcs.json --device cpu
+    python infer.py --input input --output output --config weights/mpsenet_final.json --device cpu
 """
 import argparse
 import json
@@ -31,7 +34,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", type=Path, default=REPO / "input")
     p.add_argument("--output", type=Path, default=REPO / "output")
-    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_pesqloss_pcs.json")
+    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_final.json")
     p.add_argument("--device", default="auto", help="auto | cpu | cuda")
     return p.parse_args()
 
@@ -40,27 +43,53 @@ def list_wavs(folder):
     return sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".wav")
 
 
+def weight_list(config):
+    w = config["weights"]
+    return [w] if isinstance(w, str) else list(w)
+
+
 def load_model(config_path, device):
+    """설정의 가중치(하나 또는 목록)를 모두 읽어 모델 목록과 설정을 돌려준다."""
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    weights = config_path.parent / config["weights"]
-    if config["model"] == "mpsenet":
-        from src.mpsenet import MPSENet
-        model = MPSENet(**config.get("model_kwargs", {})).load_original_checkpoint(weights, map_location=device)
-    else:
-        model = build_model(config["model"], **config.get("model_kwargs", {}))
-        model.load_state_dict(torch.load(weights, map_location=device, weights_only=True))
-    return model.to(device).eval(), config
+    models = []
+    for name in weight_list(config):
+        weights = config_path.parent / name
+        if config["model"] == "mpsenet":
+            from src.mpsenet import MPSENet
+            model = MPSENet(**config.get("model_kwargs", {})).load_original_checkpoint(weights, map_location=device)
+        else:
+            model = build_model(config["model"], **config.get("model_kwargs", {}))
+            model.load_state_dict(torch.load(weights, map_location=device, weights_only=True))
+        models.append(model.to(device).eval())
+    return models, config
 
 
 @torch.inference_mode()
-def enhance(model, noisy, device, pcs_alpha=None):
-    """임의 길이의 1차원 파형을 복원하고 입력과 같은 길이로 돌려준다."""
+def enhance(models, noisy, device, pcs_alpha=None, tta=None):
+    """임의 길이의 1차원 파형을 복원하고 입력과 같은 길이로 돌려준다.
+
+    models: 모델 하나 또는 목록. tta: {"shifts": [0, 25, ...], "flip": bool} 또는 None.
+    모든 (모델, shift, 부호) 조합의 출력을 같은 시간축으로 되돌려 평균한 뒤 PCS를 적용한다.
+    """
+    models = models if isinstance(models, (list, tuple)) else [models]
+    tta = tta or {}
+    shifts = tta.get("shifts", [0])
+    signs = [1.0, -1.0] if tta.get("flip") else [1.0]
     length = noisy.shape[0]
-    pad = max(0, max(model.n_fft, PCS_N_FFT) - length)  # 아주 짧은 입력도 STFT가 가능하도록
+    n_fft = max(m.n_fft for m in models)
+    pad = max(0, max(n_fft, PCS_N_FFT) - length)  # 아주 짧은 입력도 STFT가 가능하도록
     wave = torch.from_numpy(np.pad(noisy, (0, pad))).unsqueeze(0).to(device)
-    out = model.enhance(wave)
+    total, count = None, 0
+    for model in models:
+        for shift in shifts:
+            for sign in signs:
+                x = torch.nn.functional.pad(wave * sign, (shift, 0))
+                y = model.enhance(x).float()[..., shift:shift + wave.shape[-1]] * sign
+                total = y if total is None else total + y
+                count += 1
+    out = total / count
     if pcs_alpha:
-        out = apply_pcs(out.float(), pcs_alpha)
+        out = apply_pcs(out, pcs_alpha)
     out = out[0, :length].float().cpu().numpy()
     if not np.all(np.isfinite(out)):
         raise FloatingPointError("출력에 NaN/Inf가 있습니다.")
@@ -106,14 +135,14 @@ def main():
         sys.exit(f"output/에 입력에 없는 WAV {len(stale)}개가 있습니다(예: {stale[0].name}). "
                  "이전 결과를 지운 뒤 다시 실행하세요.")
 
-    model, config = load_model(args.config, device)
-    pcs_alpha = config.get("pcs_alpha")
-    print(f"model {config['model']} | weights {config['weights']} | PCS {pcs_alpha} | device {device} | "
-          f"files {len(inputs)}", flush=True)
+    models, config = load_model(args.config, device)
+    pcs_alpha, tta = config.get("pcs_alpha"), config.get("tta")
+    print(f"model {config['model']} | weights {', '.join(weight_list(config))} | PCS {pcs_alpha} | TTA {tta} | "
+          f"device {device} | files {len(inputs)}", flush=True)
     started = perf_counter()
     for index, src in enumerate(inputs, 1):
         noisy = read_wav(src)
-        write_wav(args.output / src.name, enhance(model, noisy, device, pcs_alpha))
+        write_wav(args.output / src.name, enhance(models, noisy, device, pcs_alpha, tta))
         if index % 50 == 0 or index == len(inputs):
             print(f"  {index}/{len(inputs)} files", flush=True)
     print(f"추론 완료: {perf_counter() - started:.1f}s", flush=True)
