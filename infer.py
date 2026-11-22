@@ -2,11 +2,12 @@
 
 - noisy 입력과 저장된 가중치만 사용한다(추가 다운로드 없음).
 - GPU가 없으면 자동으로 CPU에서 실행한다(map_location).
+- 설정 JSON의 "model"이 mpsenet이면 MP-SENet(파일당 batch 1), "pcs_alpha"가 있으면 PCS 후처리를 붙인다.
 - 저장 후 파일명 일치, 16 kHz 모노, 표본 수 일치, 유한값 여부를 검사하고
   하나라도 어긋나면 0이 아닌 종료 코드로 끝난다.
 
 예) python infer.py
-    python infer.py --input input --output output --config weights/mask_cnn_baseline.json --device cpu
+    python infer.py --input input --output output --config weights/mpsenet_pesqloss_pcs.json --device cpu
 """
 import argparse
 import json
@@ -21,6 +22,7 @@ import soundfile as sf
 import torch
 
 from src.models import build_model
+from src.pcs import N_FFT as PCS_N_FFT, apply_pcs
 
 REPO = Path(__file__).resolve().parent
 
@@ -29,7 +31,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", type=Path, default=REPO / "input")
     p.add_argument("--output", type=Path, default=REPO / "output")
-    p.add_argument("--config", type=Path, default=REPO / "weights" / "mask_cnn_baseline.json")
+    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_pesqloss_pcs.json")
     p.add_argument("--device", default="auto", help="auto | cpu | cuda")
     return p.parse_args()
 
@@ -40,19 +42,26 @@ def list_wavs(folder):
 
 def load_model(config_path, device):
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    model = build_model(config["model"], **config.get("model_kwargs", {}))
-    state = torch.load(config_path.parent / config["weights"], map_location=device, weights_only=True)
-    model.load_state_dict(state)
+    weights = config_path.parent / config["weights"]
+    if config["model"] == "mpsenet":
+        from src.mpsenet import MPSENet
+        model = MPSENet(**config.get("model_kwargs", {})).load_original_checkpoint(weights, map_location=device)
+    else:
+        model = build_model(config["model"], **config.get("model_kwargs", {}))
+        model.load_state_dict(torch.load(weights, map_location=device, weights_only=True))
     return model.to(device).eval(), config
 
 
 @torch.inference_mode()
-def enhance(model, noisy, device):
+def enhance(model, noisy, device, pcs_alpha=None):
     """임의 길이의 1차원 파형을 복원하고 입력과 같은 길이로 돌려준다."""
     length = noisy.shape[0]
-    pad = max(0, model.n_fft - length)  # 아주 짧은 입력도 STFT가 가능하도록
+    pad = max(0, max(model.n_fft, PCS_N_FFT) - length)  # 아주 짧은 입력도 STFT가 가능하도록
     wave = torch.from_numpy(np.pad(noisy, (0, pad))).unsqueeze(0).to(device)
-    out = model.enhance(wave)[0, :length].float().cpu().numpy()
+    out = model.enhance(wave)
+    if pcs_alpha:
+        out = apply_pcs(out.float(), pcs_alpha)
+    out = out[0, :length].float().cpu().numpy()
     if not np.all(np.isfinite(out)):
         raise FloatingPointError("출력에 NaN/Inf가 있습니다.")
     return out.astype(np.float32)
@@ -85,8 +94,6 @@ def main():
     if args.device == "auto":
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(args.device)
-    if device.type == "cpu":
-        torch.set_num_threads(min(4, torch.get_num_threads()))
 
     if not args.input.is_dir():
         sys.exit(f"입력 폴더가 없습니다: {args.input}")
@@ -100,11 +107,13 @@ def main():
                  "이전 결과를 지운 뒤 다시 실행하세요.")
 
     model, config = load_model(args.config, device)
-    print(f"model {config['model']} | weights {config['weights']} | device {device} | files {len(inputs)}", flush=True)
+    pcs_alpha = config.get("pcs_alpha")
+    print(f"model {config['model']} | weights {config['weights']} | PCS {pcs_alpha} | device {device} | "
+          f"files {len(inputs)}", flush=True)
     started = perf_counter()
     for index, src in enumerate(inputs, 1):
         noisy = read_wav(src)
-        write_wav(args.output / src.name, enhance(model, noisy, device))
+        write_wav(args.output / src.name, enhance(model, noisy, device, pcs_alpha))
         if index % 50 == 0 or index == len(inputs):
             print(f"  {index}/{len(inputs)} files", flush=True)
     print(f"추론 완료: {perf_counter() - started:.1f}s", flush=True)

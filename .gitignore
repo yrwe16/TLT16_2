@@ -48,3 +48,6 @@ desktop.ini
 
 # Claude Code 로컬 설정
 .claude/
+
+# 외부 코드·가중치 원본(검토 후 필요한 것만 src/, weights/로 옮김)
+external/

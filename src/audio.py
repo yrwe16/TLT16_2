@@ -42,6 +42,28 @@ def pesq_wb(clean, estimate):
     return score
 
 
+def _pesq_pair(pair):
+    return pesq_wb(*pair)
+
+
+def pesq_pair_or_nan(pair):
+    """학습 중 판별기용: 계산 실패(무음 등) 시 NaN을 돌려준다."""
+    try:
+        return pesq_wb(*pair)
+    except Exception:
+        return float("nan")
+
+
+def pesq_wb_many(cleans, estimates, workers=None):
+    """여러 쌍의 PESQ-WB를 프로세스 풀로 병렬 계산한다(Windows에서는 __main__ 가드 필요)."""
+    from concurrent.futures import ProcessPoolExecutor
+    pairs = [(np.asarray(c, dtype=np.float32), np.asarray(e, dtype=np.float32))
+             for c, e in zip(cleans, estimates)]
+    workers = workers or min(16, os.cpu_count() or 1)
+    with ProcessPoolExecutor(workers) as pool:
+        return list(pool.map(_pesq_pair, pairs, chunksize=4))
+
+
 def snr_db(clean, estimate):
     clean = clean.astype(np.float64)
     error = clean - estimate
