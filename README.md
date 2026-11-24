@@ -8,13 +8,14 @@
 | 항목 | 값 |
 | :--- | :--- |
 | 모델 | **MP-SENet** (Lu et al., 2023, MIT License): 크기·위상을 함께 복원하는 STFT 기반 모델, 2,263,372 파라미터 |
-| 가중치 평균 | EMA 실험의 8~18 epoch EMA 가중치 11개를 같은 비율로 평균(`average_checkpoints.py`) |
+| 학습 데이터 | **학습셋 1,296쌍 + 검증셋 164쌍**(6단계, 조교 허용) + Zeroth Korean clean 음성 |
+| 가중치 평균 | 마지막 학습의 8~18 epoch EMA 가중치 11개를 같은 비율로 평균(`average_checkpoints.py`) |
 | 테스트 시 증강(TTA) | 입력을 0·25·50·75 표본 늦춘 것 × 부호 반전 여부, 8회 복원해 시간축을 되돌려 평균 |
 | 후처리 | PCS(Perceptual Contrast Stretching), 강도 alpha 0.3 (`src/pcs.py`) |
-| 가중치 | `weights/mpsenet_final.pt` (Git LFS), 설정 `weights/mpsenet_final.json` |
-| **검증 PESQ-WB** | **3.5098** (검증 164개 평균, `pesq==0.0.4` wb). 잡음 입력 1.3947 |
-| 선택 기준 | 검증 평균 PESQ-WB. 한 epoch를 고르는 대신 후반 11개 epoch 평균을 써서 검증셋 과적합을 줄임. PCS 강도는 0~1 중 선택(0.3~0.5 거의 같음) |
-| CPU 추론 | 검증 164개 2,125초(약 35분, 파일당 약 13초, TTA 8회). 점수 3.5099(GPU 3.5098, 부동소수점 차이). TTA를 끄면 약 8배 빠름 |
+| 가중치 | `weights/mpsenet_trval.pt` (Git LFS), 설정 `weights/mpsenet_trval.json` |
+| **검증 PESQ-WB** | **3.5098**: 검증셋을 학습에 넣기 전, 같은 방법(`weights/mpsenet_final`)으로 잰 점수(검증 164개 평균, `pesq==0.0.4` wb). 잡음 입력 1.3947.<br>제출 모델은 검증셋도 학습했으므로 검증 점수(3.5640)는 참고값입니다 |
+| 선택 기준 | 방법·epoch 수·평균 구간·PCS 강도는 모두 검증셋을 학습에 쓰기 전에 검증 평균 PESQ-WB로 정했고, 6단계에서는 그대로 고정해 다시 학습 |
+| CPU 추론 | 검증 164개 약 2,120초(약 35분, 파일당 약 13초, TTA 8회), GPU와 같은 점수. TTA를 끄면 약 8배 빠름 |
 
 ### 단계별 검증 점수
 
@@ -28,7 +29,10 @@
 | + 미분 가능한 PESQ 손실(0.1)로 추가 학습 | 3.4529 |
 | + PCS 후처리 (alpha 0.3) | 3.4824 |
 | + 테스트 시 증강(TTA 8회) | 3.5072 |
-| **+ EMA로 이어 학습, 8~18 epoch EMA 가중치 평균** | **3.5098** |
+| **+ EMA로 이어 학습, 8~18 epoch EMA 가중치 평균** (`mpsenet_final`) | **3.5098** |
+| 6단계: 같은 방법을 학습셋 + 검증셋으로 다시 학습 (`mpsenet_trval`, **제출**) | 3.5640 (검증셋을 학습했으므로 참고값) |
+
+6단계 점검: 두 모델이 모두 학습한 학습셋 400개(1회 복원 + PCS)에서 `mpsenet_final` 3.6405, `mpsenet_trval` 3.6397, 출력 크기도 같아 검증셋 추가로 나빠진 곳은 없습니다. 테스트셋에서 나아졌는지는 잴 수 없습니다(학습 데이터 약 13% 증가).
 
 미세조정 ablation: 학습셋만 3.2799, +동적 리믹싱 3.2857, +PESQ 판별기 3.2936.
 
@@ -38,7 +42,7 @@ TTA만의 효과(PCS 0.3 기준): 부호 반전 2회 3.4959, shift 4회 3.4960, 
 ## 1. 실행 환경
 
 - 학습: Windows 11, NVIDIA RTX 4090, Python 3.12, PyTorch 2.15.0+cu132
-- 추론: **GPU가 없으면 자동으로 CPU에서 실행**됩니다. CPU 추론도 검증셋에서 거의 같은 점수(3.5099)를 확인했습니다.
+- 추론: **GPU가 없으면 자동으로 CPU에서 실행**됩니다. CPU 추론도 GPU와 같은 점수를 확인했습니다.
 
 ```bash
 conda env create -f environment.yml
@@ -57,20 +61,23 @@ pip install torch
 python infer.py
 ```
 
-- 기본 경로: 입력 `./input/`, 출력 `./output/`, 설정 `./weights/mpsenet_final.json`
+- 기본 경로: 입력 `./input/`, 출력 `./output/`, 설정 `./weights/mpsenet_trval.json`
 - 다른 경로: `python infer.py --input <입력 폴더> --output <출력 폴더> --device cpu`
 - noisy 입력과 저장된 가중치만 사용하며, 추가 다운로드가 없습니다. 파일마다 하나씩(batch 1) 처리합니다.
 - 설정 JSON의 `"tta"`를 지우면 1회 복원으로 8배 빨라집니다(검증 3.4872). `"weights"`를 목록으로 쓰면 여러 가중치의 출력을 평균합니다.
 - 처리 후 **파일명 일치, 누락/추가 WAV, 16 kHz 모노, 표본 수, NaN/Inf**를 자동 검사합니다. 하나라도 어긋나면 오류 목록을 출력하고 종료 코드 1로 끝납니다.
 - `output/`에 입력에 없는 이전 WAV가 남아 있으면 실행을 멈춥니다. 지운 뒤 다시 실행하세요.
+- 검증셋을 학습하지 않은 모델(검증 3.5098)로 돌리려면 `--config weights/mpsenet_final.json`.
 - 예제 기준선으로 돌리려면 `--config weights/mask_cnn_baseline.json`.
 
 ## 3. 검증셋 자체 검증
 
 ```bash
-python selftest_validation.py --data-root <배포 데이터 폴더>
+python selftest_validation.py --data-root <배포 데이터 폴더> --config weights/mpsenet_final.json   # 검증셋을 학습하지 않은 모델
 python evaluate.py --model mpsenet --ckpt weights/mpsenet_final.pt --by-noise   # PCS·TTA 없이 모델만
 ```
+
+기본 설정(`mpsenet_trval`)은 검증셋을 학습했으므로 점수는 참고값이고, 형식 검사용으로만 의미가 있습니다.
 
 `selftest_validation.py`는 검증 noisy 164개를 임시 `input/`에 복사하고 `infer.py`를 실행한 뒤, 저장된 `output/` WAV를 clean과 비교해 평균 PESQ-WB·SNR과 잡음 종류별 점수를 출력합니다.
 
@@ -96,9 +103,17 @@ python finetune_mpsenet.py --run-name ft_ext_pesqloss --init runs/ft_ext_zeroth/
     --steps-per-epoch 1000 --lr 4e-5 --lr-decay 0.985 --ext-speech cache/zeroth_32000.npy --ext-prob 0.5 \
     --remix-prob 0.5 --metric-weight 0.05 --pesq-loss-weight 0.1 --patience 10
 # 4) EMA로 이어 학습, epoch마다 저장 (18 epoch에서 조기 종료)
-python finetune_mpsenet.py --run-name ft_pesq_ema --init runs/ft_ext_pesqloss/g_best --epochs 20 \n    --steps-per-epoch 1000 --lr 3e-5 --lr-decay 0.985 --ext-speech cache/zeroth_32000.npy --ext-prob 0.5 \n    --remix-prob 0.5 --metric-weight 0.05 --pesq-loss-weight 0.1 --ema-decay 0.999 --save-every-epoch --patience 10
-# 5) 제출 가중치: 8~18 epoch EMA 가중치 평균
+python finetune_mpsenet.py --run-name ft_pesq_ema --init runs/ft_ext_pesqloss/g_best --epochs 20 \
+    --steps-per-epoch 1000 --lr 3e-5 --lr-decay 0.985 --ext-speech cache/zeroth_32000.npy --ext-prob 0.5 \
+    --remix-prob 0.5 --metric-weight 0.05 --pesq-loss-weight 0.1 --ema-decay 0.999 --save-every-epoch --patience 10
+# 5) 검증용 가중치: 8~18 epoch EMA 가중치 평균 (검증 3.5098)
 python average_checkpoints.py --out weights/mpsenet_final.pt runs/ft_pesq_ema/g_ep{08..18}_ema
+# 6) 제출 가중치: 4)와 같은 설정으로 학습셋 + 검증셋 학습, 18 epoch 고정(조기 종료 없음), 같은 구간 평균
+python finetune_mpsenet.py --run-name final_trval --init runs/ft_ext_pesqloss/g_best --epochs 18 \
+    --steps-per-epoch 1000 --lr 3e-5 --lr-decay 0.985 --ext-speech cache/zeroth_32000.npy --ext-prob 0.5 \
+    --remix-prob 0.5 --metric-weight 0.05 --pesq-loss-weight 0.1 --ema-decay 0.999 --save-every-epoch \
+    --train-on-validation --patience 100
+python average_checkpoints.py --out weights/mpsenet_trval.pt runs/final_trval/g_ep{08..18}_ema
 ```
 
 결과는 `runs/<실험 이름>/`에 저장됩니다(`g_best`, `history.csv`, `summary.json`, `train.log`). 제출할 가중치는 `weights/`로 복사하고 같은 이름의 `.json` 설정을 함께 둡니다.
@@ -109,10 +124,12 @@ python average_checkpoints.py --out weights/mpsenet_final.pt runs/ft_pesq_ema/g_
 | STFT | `n_fft` 400, `hop` 100, 크기 0.3 압축, 입력 RMS 정규화 |
 | 손실 | 크기 MSE 0.9, anti-wrapping 위상 0.3, 복소 MSE 0.1, 일관성 0.1, 시간 L1 0.2, PESQ 판별기 0.05 |
 | 최적화 | AdamW lr 5e-5, betas (0.8, 0.99), epoch마다 ×0.98, batch 4, 2초 구간 |
-| 동적 리믹싱 | 학습셋 잡음(noisy − clean)을 다른 clean에 SNR U[−5, 20] dB로 섞음, 시간 뒤집기. 검증셋은 사용하지 않음 |
+| 동적 리믹싱 | 학습셋 잡음(noisy − clean)을 다른 clean에 SNR U[−5, 20] dB로 섞음, 시간 뒤집기. 1~5) 단계에서는 검증셋을 쓰지 않고, 6) 제출 학습에서만 검증셋 쌍도 포함 |
 | 외부 음성 | 샘플마다 50% 확률로 Zeroth clean + 학습셋 잡음 |
-| 종료 | 검증 PESQ-WB가 6~8 epoch 동안 개선되지 않으면 조기 종료 |
+| 종료 | 검증 PESQ-WB가 6~8 epoch 동안 개선되지 않으면 조기 종료(6) 제출 학습은 18 epoch 고정) |
 | seed | 1234 |
+
+`--train-on-validation`은 검증셋을 학습 데이터에 더합니다(이때 epoch마다 찍히는 검증 점수는 학습 데이터로 잰 참고값).
 
 EMA(`--ema-decay`)는 매 step 가중치의 지수이동평균을 따로 두고, epoch마다 원래 가중치와 EMA 가중치를 모두 검증합니다.
 

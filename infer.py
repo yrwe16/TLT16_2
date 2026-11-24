@@ -10,7 +10,7 @@
   하나라도 어긋나면 0이 아닌 종료 코드로 끝난다.
 
 예) python infer.py
-    python infer.py --input input --output output --config weights/mpsenet_final.json --device cpu
+    python infer.py --input input --output output --config weights/mpsenet_trval.json --device cpu
 """
 import argparse
 import json
@@ -34,7 +34,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", type=Path, default=REPO / "input")
     p.add_argument("--output", type=Path, default=REPO / "output")
-    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_final.json")
+    p.add_argument("--config", type=Path, default=REPO / "weights" / "mpsenet_trval.json")
     p.add_argument("--device", default="auto", help="auto | cpu | cuda")
     return p.parse_args()
 

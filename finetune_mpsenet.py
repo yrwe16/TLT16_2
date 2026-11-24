@@ -58,6 +58,8 @@ def parse_args():
     p.add_argument("--pesq-loss-weight", type=float, default=0.0)
     p.add_argument("--ema-decay", type=float, default=0.0, help="0이면 끔. 매 step 가중치 지수이동평균, 검증·저장 후보에 포함")
     p.add_argument("--save-every-epoch", action="store_true", help="epoch마다 g_ep<N>(원본)·g_ep<N>_ema 저장")
+    p.add_argument("--train-on-validation", action="store_true",
+                   help="6단계: 검증셋도 학습에 넣는다. 이때 검증 점수는 학습한 데이터로 잰 것이라 참고용일 뿐이다")
     p.add_argument("--patience", type=int, default=8, help="검증 PESQ 개선 없이 기다릴 epoch")
     p.add_argument("--pesq-workers", type=int, default=12)
     return p.parse_args()
@@ -175,7 +177,12 @@ def main():
     val_set = PairedSpeech(args.data_root, "validation", REPO / "cache")
     val_noisy, val_clean = val_set.waveforms[:, 0], val_set.waveforms[:, 1]
     g = torch.Generator(device=device).manual_seed(args.seed)
-    sampler = Sampler(train_set.waveforms, device, args, g)
+    train_waves = train_set.waveforms
+    if args.train_on_validation:
+        if train_waves.shape[-1] != val_set.waveforms.shape[-1]:
+            raise ValueError("학습·검증 표본 수가 달라 합칠 수 없습니다.")
+        train_waves = torch.cat([train_waves, val_set.waveforms])
+    sampler = Sampler(train_waves, device, args, g)
 
     model = MPSENet().load_original_checkpoint(args.init, map_location=device).to(device)
     gen = model.generator
@@ -197,6 +204,9 @@ def main():
         for prm in ema.parameters():
             prm.requires_grad_(False)
 
+    if args.train_on_validation:
+        log(f"학습 데이터: train {len(train_set)} + validation {len(val_set)} = {len(train_waves)}쌍 "
+            "(검증 점수는 학습 데이터로 잰 참고값)")
     log(f"start | init {args.init.name} | args {vars(args)}")
     best = validate(model, val_noisy, val_clean, device, pool)
     torch.save({"generator": gen.state_dict()}, run_dir / "g_best")

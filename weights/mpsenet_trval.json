@@ -1,0 +1,41 @@
+{
+  "model": "mpsenet",
+  "model_kwargs": {},
+  "weights": "mpsenet_trval.pt",
+  "pcs_alpha": 0.3,
+  "sample_rate": 16000,
+  "validation_pesq_wb": null,
+  "validation_pesq_wb_without_pcs": 3.4529,
+  "lineage": [
+    "MP-SENet (Lu et al. 2023, MIT) public DNS checkpoint g_best_dns: zero-shot 3.1757",
+    "runs/ft_dns_remix_disc: fine-tuned on our train set, dynamic remix 0.5, metric discriminator 0.05: 3.2936",
+    "runs/ft_ext_zeroth: + Zeroth Korean (OpenSLR 40, CC BY 4.0) clean speech mixed with our train noise, ext 0.5: 3.3356 (epoch 26)",
+    "runs/ft_ext_pesqloss: + differentiable PESQ loss 0.1 (torch-pesq, MIT), lr 4e-5, decay 0.985: 3.4529 (epoch 19)",
+    "runs/final_trval: from ft_ext_pesqloss, train 1296 + validation 164 = 1460 pairs (--train-on-validation), lr 3e-5, decay 0.985, PESQ loss 0.1, EMA 0.999, fixed 18 epochs (no early stopping)",
+    "weights = uniform average of the EMA weights saved at epochs 8-18 (same rule as mpsenet_final)",
+    "PCS alpha 0.3 + TTA (shifts 0/25/50/75 x polarity flip, 8 passes)"
+  ],
+  "training": {
+    "loss": "MP-SENet: mag MSE 0.9, anti-wrapping phase 0.3, complex 0.1, consistency 0.1, time L1 0.2, metric 0.05, PESQ loss 0.1",
+    "optimizer": "AdamW lr 3e-5 betas (0.8, 0.99), ExponentialLR 0.985/epoch, EMA decay 0.999",
+    "batch_size": 4,
+    "segment_samples": 32000,
+    "snr_range_db": [
+      -5,
+      20
+    ],
+    "steps_per_epoch": 1000,
+    "device": "NVIDIA GeForce RTX 4090",
+    "torch": "2.15.0+cu132"
+  },
+  "tta": {
+    "shifts": [
+      0,
+      25,
+      50,
+      75
+    ],
+    "flip": true
+  },
+  "validation_pesq_wb_note": "trained on train+validation, so the validation score (3.5640 with TTA8+PCS 0.3) is not a held-out score. Same recipe as mpsenet_final (held-out 3.5098); on 400 train files both score 3.640."
+}
